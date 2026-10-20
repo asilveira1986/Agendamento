@@ -1,0 +1,11 @@
+{
+  "name": "agendamento",
+  "version": "1.0.0",
+  "description": "Sistema de agendamento (serviços, profissionais, horários e reservas)",
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test --no-warnings test/*.test.js"
+  }
+}

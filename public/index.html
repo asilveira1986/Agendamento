@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agendamento</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --fg:#1d2330; --muted:#667085; --brand:#2563eb; --line:#e4e7ec; --err:#b42318; --ok:#067647; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12151c; --card:#1b202b; --fg:#e8ebf2; --muted:#98a2b3; --line:#2b3242; --brand:#5b8def; --err:#f97066; --ok:#47cd89; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:880px; margin:0 auto; padding:16px; display:grid; gap:16px; }
+  h1 { font-size:1.4rem; margin:8px 0 0; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  h2 { font-size:1.05rem; margin:0 0 12px; }
+  label { display:block; font-size:.85rem; color:var(--muted); margin-bottom:10px; }
+  input, select, button { font:inherit; width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--fg); }
+  button { background:var(--brand); color:#fff; border:0; cursor:pointer; width:auto; }
+  button.ghost { background:transparent; color:var(--err); border:1px solid var(--line); padding:4px 10px; }
+  .row { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
+  .slots { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 14px; }
+  .slots button { background:var(--bg); color:var(--fg); border:1px solid var(--line); }
+  .slots button.sel { background:var(--brand); color:#fff; border-color:var(--brand); }
+  .msg { min-height:1.4em; font-size:.9rem; } .msg.err { color:var(--err); } .msg.ok { color:var(--ok); }
+  table { width:100%; border-collapse:collapse; font-size:.92rem; }
+  td, th { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); }
+  .cancelled { opacity:.5; text-decoration:line-through; }
+  .muted { color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Agendamento</h1>
+
+  <section>
+    <h2>Novo agendamento</h2>
+    <div class="row">
+      <label>Serviço <select id="service"></select></label>
+      <label>Profissional <select id="professional"></select></label>
+      <label>Data <input type="date" id="date"></label>
+    </div>
+    <div>Horários disponíveis</div>
+    <div class="slots" id="slots"></div>
+    <div class="row">
+      <label>Nome <input id="name" autocomplete="name"></label>
+      <label>Telefone <input id="phone" autocomplete="tel" inputmode="tel"></label>
+    </div>
+    <button id="book">Agendar</button>
+    <div class="msg" id="msg" role="status"></div>
+  </section>
+
+  <section>
+    <h2>Agenda do dia</h2>
+    <table>
+      <thead><tr><th>Hora</th><th>Cliente</th><th>Serviço</th><th>Profissional</th><th></th></tr></thead>
+      <tbody id="agenda"></tbody>
+    </table>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let chosen = null;
+
+async function api(path, opts) {
+  const res = await fetch(path, opts && { ...opts, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(opts.body) });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error);
+  return data;
+}
+function say(text, kind) { $('msg').textContent = text; $('msg').className = 'msg ' + (kind ?? ''); }
+const opt = (v, t) => Object.assign(document.createElement('option'), { value: v, textContent: t });
+
+async function loadSlots() {
+  chosen = null;
+  $('slots').replaceChildren();
+  if (!$('service').value || !$('professional').value || !$('date').value) return;
+  const q = new URLSearchParams({ serviceId: $('service').value, professionalId: $('professional').value, date: $('date').value });
+  const slots = await api('/api/availability?' + q);
+  if (!slots.length) $('slots').textContent = 'Sem horários neste dia.';
+  for (const s of slots) {
+    const b = Object.assign(document.createElement('button'), { textContent: s });
+    b.onclick = () => { chosen = s; [...$('slots').children].forEach((c) => c.classList.toggle('sel', c === b)); };
+    $('slots').append(b);
+  }
+}
+
+async function loadAgenda() {
+  const rows = $('agenda');
+  rows.replaceChildren();
+  if (!$('date').value) return;
+  const list = await api('/api/appointments?date=' + $('date').value);
+  if (!list.length) rows.innerHTML = '<tr><td colspan="5" class="muted">Nenhum agendamento.</td></tr>';
+  for (const a of list) {
+    const tr = document.createElement('tr');
+    if (a.status === 'cancelled') tr.className = 'cancelled';
+    for (const t of [a.start_at.slice(11), `${a.client_name} (${a.client_phone})`, a.service_name, a.professional_name]) {
+      tr.append(Object.assign(document.createElement('td'), { textContent: t }));
+    }
+    const td = document.createElement('td');
+    if (a.status === 'scheduled') {
+      const b = Object.assign(document.createElement('button'), { textContent: 'Cancelar', className: 'ghost' });
+      b.onclick = async () => { await api('/api/appointments/' + a.id, { method: 'DELETE' }); refresh(); };
+      td.append(b);
+    }
+    tr.append(td);
+    rows.append(tr);
+  }
+}
+
+const refresh = () => Promise.all([loadSlots(), loadAgenda()]).catch((e) => say(e.message, 'err'));
+
+$('book').onclick = async () => {
+  if (!chosen) return say('Escolha um horário.', 'err');
+  try {
+    await api('/api/appointments', { method: 'POST', body: {
+      serviceId: Number($('service').value), professionalId: Number($('professional').value),
+      startAt: `${$('date').value}T${chosen}`, clientName: $('name').value, clientPhone: $('phone').value,
+    } });
+    say('Agendamento confirmado!', 'ok');
+  } catch (e) { say(e.message, 'err'); }
+  refresh();
+};
+
+(async () => {
+  const [services, pros] = await Promise.all([api('/api/services'), api('/api/professionals')]);
+  services.forEach((s) => $('service').append(opt(s.id, `${s.name} (${s.duration_min} min)`)));
+  pros.forEach((p) => $('professional').append(opt(p.id, p.name)));
+  const d = new Date();
+  $('date').value = new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  ['service', 'professional', 'date'].forEach((id) => $(id).addEventListener('change', refresh));
+  refresh();
+})();
+</script>
+</body>
+</html>
